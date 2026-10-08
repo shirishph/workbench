@@ -51,6 +51,9 @@ def load_data(path):
     df["created_at"] = pd.to_datetime(df["created_at"])
     df["created_date"] = pd.to_datetime(df["created_date"])
 
+    # Exclude sales-driven repair orders
+    df = df[df["ro_type"] != "SALES"].copy()
+
     return df
 
 

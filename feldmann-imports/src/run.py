@@ -3,7 +3,8 @@ import pickle
 import yaml
 import pandas as pd
 from openai import OpenAI
-
+import sys
+import math
 
 DATA_PATH = "../data/RO_Detail.csv"
 MODEL_PATH = "../model.pkl"
@@ -438,6 +439,17 @@ Explain the computational result concisely.
             f"Error executing generated analysis: {e}"
         )
 
+def format_hour(hour):
+    hour = int(hour)
+
+    if hour == 0:
+        return "12 AM"
+    if hour < 12:
+        return f"{hour} AM"
+    if hour == 12:
+        return "12 PM"
+
+    return f"{hour - 12} PM"
 
 # =========================================================
 # Main
@@ -449,82 +461,141 @@ if __name__ == "__main__":
     # Part 1
     # -----------------------------------------------------
 
-    import sys
-
-    if len(sys.argv) != 3:
-        print("Usage: python run.py YYYY-MM-DD HH")
-        sys.exit(1)
-
-    try:
-        date = pd.Timestamp(sys.argv[1])
-        hour = int(sys.argv[2])
-    except ValueError:
-        print("Invalid date or hour.")
-        sys.exit(1)
-
-    if not 0 <= hour <= 23:
-        print("Hour must be between 0 and 23.")
-        sys.exit(1)
 
     with open(MODEL_PATH, "rb") as f:
         model = pickle.load(f)
 
-    prediction = predict(model, date, hour)
+    if sys.argv[1] == "week":
 
-    print("\n\n\n🔹 APPOINTMENT DEMAND FORECAST")
-    print("=" * 50)
-    print(LIGHT_BLUE)
-    print(f"Date:                   {date.date()}")
-    print(f"Hour:                   {hour:02d}:00")
-    print(RESET)
+        week_number = int(sys.argv[2])
+        monday = pd.Timestamp.fromisocalendar(2026, week_number, 1)
 
-    if prediction is None:
-        print("Predicted appointment cap: N/A")
-        print(
-            "No historical data available "
-            "for this weekday/hour."
+        rows = []
+
+        for day_offset in range(5):
+            date = monday + pd.Timedelta(days=day_offset)
+            weekday = date.weekday()
+
+            for hour in range(24):
+                prediction = model.get((weekday, hour))
+
+                if prediction is not None:
+                    rows.append({
+                        "date": date.date(),
+                        "weekday": date.day_name(),
+                        "hour": hour,
+                        "predicted_demand": int(math.floor(prediction))
+                    })
+
+        result = pd.DataFrame(rows)
+
+        calendar = result.pivot(
+            index="weekday",
+            columns="hour",
+            values="predicted_demand"
         )
+
+        calendar = calendar.map(
+            lambda x: int(x) if pd.notna(x) else "-"
+        )
+
+        calendar.columns = [
+            format_hour(hour)
+            for hour in calendar.columns
+        ]
+
+        weekday_order = [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday"
+        ]
+
+        calendar = calendar.reindex(weekday_order)
+
+        calendar.insert(
+            0,
+            "Date",
+            result.groupby("weekday")["date"]
+            .first()
+            .reindex(weekday_order)
+            .map(lambda x: x.strftime("%Y-%m-%d"))
+        )
+
+        print()
+        print(f"WEEK {week_number} — APPOINTMENT DEMAND")
+        print(calendar.to_string())
+
     else:
-        print(YELLOW)
-        print(
-            f"Predicted appointment cap: "
-            f"{prediction:.0f}"
-        )
+
+        try:
+            date = pd.Timestamp(sys.argv[1])
+            hour = int(sys.argv[2])
+        except ValueError:
+            print("Invalid date or hour.")
+            sys.exit(1)
+
+        if not 0 <= hour <= 23:
+            print("Hour must be between 0 and 23.")
+            sys.exit(1)
+
+        prediction = predict(model, date, hour)
+
+        print("\n\n\n🔹 APPOINTMENT DEMAND FORECAST")
+        print("=" * 50)
+        print(LIGHT_BLUE)
+        print(f"Date:                   {date.date()}")
+        print(f"Hour:                   {hour:02d}:00")
         print(RESET)
 
-    # -----------------------------------------------------
-    # Part 2
-    # -----------------------------------------------------
-
-    print("🔹 AI DATA AGENT")
-    print("=" * 50)
-
-    while True:
-
-        print("\n\n\n\nPossible questions:")
-        print("What was our hourly appointment demand?")
-        print("Which department handled the most appointments?")
-        print("How many appointments did Dept B have?")
-
-        user_query = input(
-            "\nAsk a question (or type 'exit'): "
-        ).strip()
-
-        if user_query.lower() == "exit":
-            print("Exiting AI Data Agent.")
-            break
-
-        if not user_query:
-            continue
-
-        rule_key = choose_question(user_query)
-
-        if rule_key is None:
+        if prediction is None:
+            print("Predicted appointment cap: N/A")
             print(
-                "\nI don't currently have an analysis "
-                "capability for that question."
+                "No historical data available "
+                "for this weekday/hour."
             )
-            continue
+        else:
+            print(YELLOW)
+            print(
+                f"Predicted appointment cap: "
+                f"{prediction:.0f}"
+            )
+            print(RESET)
 
-        execute_agent_query(user_query, rule_key, date, hour)
+        # -----------------------------------------------------
+        # Part 2
+        # -----------------------------------------------------
+
+        print("🔹 AI DATA AGENT")
+        print("=" * 50)
+
+        while True:
+
+            print("\n\n\n\nPossible questions:")
+            print("What was our hourly appointment demand?")
+            print("Which department handled the most appointments?")
+            print("How many appointments did Dept B have?")
+
+            user_query = input(
+                "\nAsk a question (or type 'exit'): "
+            ).strip()
+
+            if user_query.lower() == "exit":
+                print("Exiting AI Data Agent.")
+                break
+
+            if not user_query:
+                continue
+
+            rule_key = choose_question(user_query)
+
+            if rule_key is None:
+                print(
+                    "\nI don't currently have an analysis "
+                    "capability for that question."
+                )
+                continue
+
+            execute_agent_query(user_query, rule_key, date, hour)
 
